@@ -52,19 +52,61 @@ ThingsBoard tb(mqttClient, MAX_MESSAGE_SIZE);
 
 DHT20 dht20;
 
+// Scheduler region
+bool schedState;
+TaskHandle_t pSendTelemetryTask;
+
+
+void sendTelemetryTask(void *pvParameters) {
+  while (true) {
+      dht20.read();
+      
+      float temperature = dht20.getTemperature();
+      float humidity = dht20.getHumidity();
+
+      if (isnan(temperature) || isnan(humidity)) {
+        Serial.println("Failed to read from DHT20 sensor!");
+      } else {
+        Serial.print("Temperature: ");
+        Serial.print(temperature);
+        Serial.print(" °C, Humidity: ");
+        Serial.print(humidity);
+        Serial.println(" %");
+
+        tb.sendTelemetryData("temperature", temperature);
+        tb.sendTelemetryData("humidity", humidity);
+      }
+
+      vTaskDelay(5000 / portTICK_PERIOD_MS); //5s delay
+    }
+}
+
 RPC_Response setValueLED(const RPC_Data &data) {
-  if(data == "getStateLED") {
-    return RPC_Response("getStateLED", digitalRead(LED_PIN));
-  }
-  else {
-    Serial.println("Received Switch state");
-    bool newState = data;
-    Serial.print("Switch state change: ");
-    Serial.println(newState);
-    digitalWrite(LED_PIN, newState);
+  // Serial.println("Received Switch state");
+  // bool newState = data;
+  // Serial.print("Switch state change: ");
+  // Serial.println(newState);
+  // digitalWrite(LED_PIN, newState);
+  // attributesChanged = true;
+  // return RPC_Response("setStateLED", newState);
+
+  Serial.println("Received switch scheduler state");
+  bool newState = data;
+  Serial.print("Switch scheduler state: ");
+  Serial.println(newState);
+  // digitalWrite(LED_PIN, newState);
+  // TODO: 
+  if(schedState != newState) { // State change
+    if(newState == 1) { // Scheduler ON
+      xTaskCreate(sendTelemetryTask, "sendTelemetryTask", 4096, NULL, 2, &pSendTelemetryTask);
+    }
+    else { // Scheduler OFF
+      // Delete "Send Telemetry" task
+      vTaskDelete(pSendTelemetryTask);
+    }
     attributesChanged = true;
-    return RPC_Response("setStateLED", newState);
   }
+  return RPC_Response("setStateLED", newState);
 }
 
 const std::array<RPC_Callback, 1U> callbacks = {
@@ -185,29 +227,6 @@ void sendAtributesTask(void *pvParameters) {
 }
 
 
-void sendTelemetryTask(void *pvParameters) {
-  while (true) {
-      dht20.read();
-      
-      float temperature = dht20.getTemperature();
-      float humidity = dht20.getHumidity();
-
-      if (isnan(temperature) || isnan(humidity)) {
-        Serial.println("Failed to read from DHT20 sensor!");
-      } else {
-        Serial.print("Temperature: ");
-        Serial.print(temperature);
-        Serial.print(" °C, Humidity: ");
-        Serial.print(humidity);
-        Serial.println(" %");
-
-        tb.sendTelemetryData("temperature", temperature);
-        tb.sendTelemetryData("humidity", humidity);
-      }
-
-      vTaskDelay(2000 / portTICK_PERIOD_MS); //2s delay
-    }
-}
 
 void tbLoopTask(void *pvParameters) {
   while (true) {
@@ -228,7 +247,7 @@ void setup() {
   xTaskCreate(connectToWiFi, "connectToWiFi", 4096, NULL, 1, NULL);
   xTaskCreate(coreIoTConnectTask, "coreIoTConnectTask", 4096, NULL, 1, NULL);
   xTaskCreate(sendAtributesTask, "sendAtributesTask", 4096, NULL, 2, NULL);
-  xTaskCreate(sendTelemetryTask, "sendTelemetryTask", 4096, NULL, 2, NULL);
+  xTaskCreate(sendTelemetryTask, "sendTelemetryTask", 4096, NULL, 2, &pSendTelemetryTask);
   xTaskCreate(tbLoopTask, "tbLoopTask", 2048, NULL, 1, NULL);
   
 }
