@@ -9,24 +9,25 @@
 #include "Wire.h"
 #include <ArduinoOTA.h>
 
-constexpr char WIFI_SSID[] = "ATFox";
-constexpr char WIFI_PASSWORD[] = "Trananhtai272";
+constexpr char WIFI_SSID[] = "Hoang";
+constexpr char WIFI_PASSWORD[] = "0913755577";
 
-constexpr char TOKEN[] = "7s5pokn2se622pzn1jxu";
+constexpr char TOKEN[] = "wl6l3sfpxaeqts1a16nl";
 
 constexpr char THINGSBOARD_SERVER[] = "app.coreiot.io";
 constexpr uint16_t THINGSBOARD_PORT = 1883U;
 
-constexpr char MQTT_CLIENT_ID[] = "qb7zjusiyjwyxrmgjhqw";
-constexpr char MQTT_USER[] = "r2eb0mx2ynmygqkom9fa";
-constexpr char MQTT_PASSWORD[] = "62ur5tohahtser1k9nu5";
+constexpr char MQTT_CLIENT_ID[] = "36040z4q1rmqbrwktxef";
+constexpr char MQTT_USER[] = "dns3ezwxgd09m97kkn1q";
+constexpr char MQTT_PASSWORD[] = "l6mf51aqcnsn3bndsb9k";
 
 constexpr uint32_t MAX_MESSAGE_SIZE = 1024U;
 constexpr uint32_t SERIAL_DEBUG_BAUD = 115200U;
 
-constexpr char BLINKING_INTERVAL_ATTR[] = "blinkingInterval";
-constexpr char LED_MODE_ATTR[] = "ledMode";
-constexpr char LED_STATE_ATTR[] = "ledState";
+// constexpr char BLINKING_INTERVAL_ATTR[] = "blinkingInterval";
+// constexpr char LED_MODE_ATTR[] = "ledMode";
+// constexpr char LED_STATE_ATTR[] = "ledState";
+constexpr char SCHED_STATE_ATTR[] = "schedState";
 
 volatile bool attributesChanged = false;
 volatile int ledMode = 0;
@@ -42,8 +43,7 @@ constexpr int16_t telemetrySendInterval = 10000U;
 uint32_t previousDataSend;
 
 constexpr std::array<const char *, 2U> SHARED_ATTRIBUTES_LIST = {
-  LED_STATE_ATTR,
-  BLINKING_INTERVAL_ATTR
+  SCHED_STATE_ATTR
 };
 
 WiFiClient wifiClient;
@@ -53,7 +53,7 @@ ThingsBoard tb(mqttClient, MAX_MESSAGE_SIZE);
 DHT20 dht20;
 
 // Scheduler region
-bool schedState;
+bool schedState = true;
 TaskHandle_t pSendTelemetryTask;
 
 
@@ -82,31 +82,18 @@ void sendTelemetryTask(void *pvParameters) {
 }
 
 RPC_Response setValueLED(const RPC_Data &data) {
-  // Serial.println("Received Switch state");
-  // bool newState = data;
-  // Serial.print("Switch state change: ");
-  // Serial.println(newState);
-  // digitalWrite(LED_PIN, newState);
-  // attributesChanged = true;
-  // return RPC_Response("setStateLED", newState);
-
-  Serial.println("Received switch scheduler state");
-  bool newState = data;
-  Serial.print("Switch scheduler state: ");
-  Serial.println(newState);
-  // digitalWrite(LED_PIN, newState);
-  // TODO: 
-  if(schedState != newState) { // State change
-    if(newState == 1) { // Scheduler ON
-      xTaskCreate(sendTelemetryTask, "sendTelemetryTask", 4096, NULL, 2, &pSendTelemetryTask);
-    }
-    else { // Scheduler OFF
-      // Delete "Send Telemetry" task
-      vTaskDelete(pSendTelemetryTask);
-    }
-    attributesChanged = true;
+  if(data == "getStateLED") {
+    return RPC_Response("getStateLED", digitalRead(LED_PIN));
   }
-  return RPC_Response("setStateLED", newState);
+  else {
+    Serial.println("Received Switch state");
+    bool newState = data;
+    Serial.print("Switch state change: ");
+    Serial.println(newState);
+    digitalWrite(LED_PIN, newState);
+    attributesChanged = true;
+    return RPC_Response("setStateLED", newState);
+  }
 }
 
 const std::array<RPC_Callback, 1U> callbacks = {
@@ -138,18 +125,23 @@ const bool reconnect() {
 
 void processSharedAttributes(const Shared_Attribute_Data &data) {
   for (auto it = data.begin(); it != data.end(); ++it) {
-    if (strcmp(it->key().c_str(), BLINKING_INTERVAL_ATTR) == 0) {
-      const uint16_t new_interval = it->value().as<uint16_t>();
-      if (new_interval >= BLINKING_INTERVAL_MS_MIN && new_interval <= BLINKING_INTERVAL_MS_MAX) {
-        blinkingInterval = new_interval;
-        Serial.print("Blinking interval is set to: ");
-        Serial.println(new_interval);
+    if (strcmp(it->key().c_str(), SCHED_STATE_ATTR) == 0) { 
+      schedState = it->value().as<bool>();
+      
+      if(schedState) { // Scheduler ON
+        if(pSendTelemetryTask == NULL) {
+          Serial.println("[INFO]: Scheduler is ON");
+          xTaskCreate(sendTelemetryTask, "sendTelemetryTask", 4096, NULL, 2, &pSendTelemetryTask);
+        }
       }
-    } else if (strcmp(it->key().c_str(), LED_STATE_ATTR) == 0) {
-      ledState = it->value().as<bool>();
-      digitalWrite(LED_PIN, ledState);
-      Serial.print("LED state is set to: ");
-      Serial.println(ledState);
+      else { // Scheduler OFF
+        // Delete "Send Telemetry" task
+        if(pSendTelemetryTask != NULL) {
+          Serial.println("[INFO]: Scheduler is OFF");
+          vTaskDelete(pSendTelemetryTask);
+          pSendTelemetryTask = NULL;
+        }
+      }
     }
   }
   attributesChanged = true;
@@ -213,7 +205,7 @@ void sendAtributesTask(void *pvParameters) {
   while (true) {
     if (attributesChanged) {
       attributesChanged = false;
-      tb.sendAttributeData(LED_STATE_ATTR, digitalRead(LED_PIN));
+      // tb.sendAttributeData(SCHED_STATE_ATTR, schedState);
     }
 
     tb.sendAttributeData("rssi", WiFi.RSSI());
