@@ -4,10 +4,13 @@
 
 #include <WiFi.h>
 #include <Arduino_MQTT_Client.h>
+// #include <HTTPClient.h>
 #include <ThingsBoard.h>
 #include "DHT20.h"
 #include "Wire.h"
-#include <ArduinoOTA.h>
+// #include <ArduinoOTA.h>
+#include <Update.h>
+#include <HTTPClient.h> // Include HTTPClient library
 
 constexpr char WIFI_SSID[] = "Hoang";
 constexpr char WIFI_PASSWORD[] = "0913755577";
@@ -28,6 +31,10 @@ constexpr uint32_t SERIAL_DEBUG_BAUD = 115200U;
 // constexpr char LED_MODE_ATTR[] = "ledMode";
 // constexpr char LED_STATE_ATTR[] = "ledState";
 constexpr char SCHED_STATE_ATTR[] = "schedState";
+constexpr char FW_TITLE_ATTR[] = "fw_title";
+constexpr char FW_VERSION_ATTR[] = "fw_version";
+constexpr char FW_TAG_ATTR[] = "fw_tag";
+constexpr char FW_URL_ATTR[] = "fw_url";
 
 volatile bool attributesChanged = false;
 volatile int ledMode = 0;
@@ -42,8 +49,12 @@ uint32_t previousStateChange;
 constexpr int16_t telemetrySendInterval = 10000U;
 uint32_t previousDataSend;
 
-constexpr std::array<const char *, 2U> SHARED_ATTRIBUTES_LIST = {
-  SCHED_STATE_ATTR
+constexpr std::array<const char *, 5U> SHARED_ATTRIBUTES_LIST = {
+  SCHED_STATE_ATTR,
+  FW_TITLE_ATTR,
+  FW_VERSION_ATTR,
+  FW_TAG_ATTR,
+  FW_URL_ATTR
 };
 
 WiFiClient wifiClient;
@@ -51,6 +62,18 @@ Arduino_MQTT_Client mqttClient(wifiClient);
 ThingsBoard tb(mqttClient, MAX_MESSAGE_SIZE);
 
 DHT20 dht20;
+
+// Firmware upgrage (current)
+String fwVersion = "1.2";
+String fwTitle = "OTA";
+String fwTag = "OTA 1.2";
+String fwVersionProc = "1.2";
+String fwTitleProc = "OTA";
+String fwTagProc = "OTA 1.2";
+String fwUrlProc = "";
+bool isFwUrlReady = false;
+bool isFwOutdated = false;
+bool isFwUpgradeTriggered = false; 
 
 // Scheduler region
 bool schedState = true;
@@ -143,6 +166,33 @@ void processSharedAttributes(const Shared_Attribute_Data &data) {
         }
       }
     }
+    if (strcmp(it->key().c_str(), FW_VERSION_ATTR) == 0) {
+      String newFwVersion = it->value().as<String>();
+      // Serial.print("[INFO]: Subscribe FW_VERSION_ATTR with value ");
+      if(newFwVersion != fwVersion) {
+        fwVersionProc = newFwVersion;
+        isFwOutdated = true;
+      }
+    }
+    if (strcmp(it->key().c_str(), FW_TAG_ATTR) == 0) {
+      String newFwTag = it->value().as<String>();
+      if(newFwTag != fwTag) {
+        fwTagProc = newFwTag;
+        isFwOutdated = true;
+      }
+    }
+    if (strcmp(it->key().c_str(), FW_TITLE_ATTR) == 0) {
+      String newFwTitle = it->value().as<String>();
+      if(newFwTitle != fwTitle) {
+        fwTitleProc = newFwTitle;
+        isFwOutdated = true;
+      }
+    }
+    if (strcmp(it->key().c_str(), FW_URL_ATTR) == 0) {
+      String newFwUrl = it->value().as<String>();
+      fwUrlProc = newFwUrl;
+      isFwUrlReady = isFwOutdated;
+    }
   }
   attributesChanged = true;
 }
@@ -218,7 +268,76 @@ void sendAtributesTask(void *pvParameters) {
   }
 }
 
+void OTAUpdateTask(void *pvParameters) {
+  while(true) {
+    Serial.printf("[INFO]: Print from OTA Task - isFwOutdated: %s, isFwUrlReady: %s\n", isFwOutdated ? "true" : "false", isFwUrlReady ? "true" : "false");
+    Serial.printf("[INFO]: Print from OTA Task - Current firmware tag: %s, Current firmware version: %s\n", fwTag, fwVersion);
+    if(isFwOutdated && isFwUrlReady) {
+      Serial.println("[INFO]: New firmware version is ready");
 
+      HTTPClient http;
+      Serial.println("[INFO]: Connecting to " + String(fwUrlProc));
+    
+      http.begin(wifiClient, fwUrlProc);
+      int httpCode = http.GET();
+    
+      if (httpCode != HTTP_CODE_OK) {
+        Serial.printf("[ERROR]: HTTP GET firmware failed, error: %s\n", http.errorToString(httpCode).c_str());
+        http.end();
+        return;
+      }
+    
+      int contentLength = http.getSize();
+      if (contentLength <= 0) {
+        Serial.println("[ERROR]: Firmware Content-Length is not valid");
+        http.end();
+        return;
+      }
+    
+      bool canBegin = Update.begin(contentLength);
+      if (!canBegin) {
+        Serial.println("[WARN]: ESP32 does not enough space to begin OTA");
+        http.end();
+        return;
+      }
+    
+      Serial.println("[INFO]: Begin OTA update");
+      size_t written = Update.writeStream(*http.getStreamPtr());
+    
+      if (written == contentLength) {
+        Serial.println("[INFO]: Written firmware successfully");
+      } else {
+        Serial.printf("[ERROR]: Written only %d/%d bytes. OTA failed!\n", written, contentLength);
+        http.end();
+        return;
+      }
+    
+      if (Update.end()) {
+        if (Update.isFinished()) {
+          Serial.println("[INFO]: Update successfully completed. Rebooting...");
+          http.end();
+          delay(1000);
+          ESP.restart();
+          return;
+        } else {
+          Serial.println("[ERROR]: Update not finished");
+          http.end();
+          return;
+        }
+      } else {
+        Serial.printf("[INFO]: Update.end() failed with error %d\n", Update.getError());
+        http.end();
+        return;
+      }
+      isFwOutdated = false;
+      isFwUrlReady = false;
+      fwVersion = fwVersion;
+      fwTitle = fwTitle;
+      fwTag = fwTag;
+    }
+    vTaskDelay(4000 / portTICK_PERIOD_MS); //1s delay
+  }
+}
 
 void tbLoopTask(void *pvParameters) {
   while (true) {
@@ -240,10 +359,10 @@ void setup() {
   xTaskCreate(coreIoTConnectTask, "coreIoTConnectTask", 4096, NULL, 1, NULL);
   xTaskCreate(sendAtributesTask, "sendAtributesTask", 4096, NULL, 2, NULL);
   xTaskCreate(sendTelemetryTask, "sendTelemetryTask", 4096, NULL, 2, &pSendTelemetryTask);
-  xTaskCreate(tbLoopTask, "tbLoopTask", 2048, NULL, 1, NULL);
-  
+  xTaskCreate(tbLoopTask, "tbLoopTask", 24576, NULL, 1, NULL);
+  xTaskCreate(OTAUpdateTask, "OTAUpdateTask", 24576, NULL, 1, NULL);
 }
 
 void loop() {
-  
+
 }
