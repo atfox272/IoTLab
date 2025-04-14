@@ -295,20 +295,23 @@ void OTAUpdateTask(void *pvParameters) {
       if (httpCode != HTTP_CODE_OK) {
         Serial.printf("[ERROR]: HTTP Response: %u\n", httpCode);
         Serial.printf("[ERROR]: HTTP GET firmware failed, error: %s\n", http.errorToString(httpCode).c_str());
+        tb.sendAttributeData("fw_state", "FAILED");
         http.end();
         return;
       }
-    
+      
       int contentLength = http.getSize();
       if (contentLength <= 0) {
         Serial.println("[ERROR]: Firmware Content-Length is not valid");
+        tb.sendAttributeData("fw_state", "FAILED");
         http.end();
         return;
       }
-    
+      
       bool canBegin = Update.begin(contentLength);
       if (!canBegin) {
         Serial.println("[WARN]: ESP32 does not enough space to begin OTA");
+        tb.sendAttributeData("fw_state", "FAILED");
         http.end();
         return;
       }
@@ -320,6 +323,7 @@ void OTAUpdateTask(void *pvParameters) {
         Serial.println("[INFO]: Written firmware successfully");
       } else {
         Serial.printf("[ERROR]: Written only %d/%d bytes. OTA failed!\n", written, contentLength);
+        tb.sendAttributeData("fw_state", "FAILED");
         http.end();
         return;
       }
@@ -327,17 +331,20 @@ void OTAUpdateTask(void *pvParameters) {
       if (Update.end()) {
         if (Update.isFinished()) {
           Serial.println("[INFO]: Update successfully completed. Rebooting...");
+          tb.sendAttributeData("fw_state", "UPDATED");
           http.end();
           delay(1000);
           ESP.restart();
           return;
         } else {
           Serial.println("[ERROR]: Update not finished");
+          tb.sendAttributeData("fw_state", "FAILED");
           http.end();
           return;
         }
       } else {
         Serial.printf("[INFO]: Update.end() failed with error %d\n", Update.getError());
+        tb.sendAttributeData("fw_state", "FAILED");
         http.end();
         return;
       }
