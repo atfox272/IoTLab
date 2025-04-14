@@ -11,9 +11,10 @@
 // #include <ArduinoOTA.h>
 #include <Update.h>
 #include <HTTPClient.h> // Include HTTPClient library
+#include <WiFiClientSecure.h>
 
-constexpr char WIFI_SSID[] = "Hoang";
-constexpr char WIFI_PASSWORD[] = "0913755577";
+constexpr char WIFI_SSID[] = "ATFox";
+constexpr char WIFI_PASSWORD[] = "Trananhtai272";
 
 constexpr char TOKEN[] = "wl6l3sfpxaeqts1a16nl";
 
@@ -267,21 +268,32 @@ void sendAtributesTask(void *pvParameters) {
     vTaskDelay(1000 / portTICK_PERIOD_MS); //1s delay
   }
 }
-
+void VersionMonitorTask(void *pvParameters) {
+  while (true) {
+    Serial.printf("[INFO]: Print from firmware with tag %s\n", fwTag);
+    vTaskDelay(4000 / portTICK_PERIOD_MS); //4s delay
+  }
+  
+}
 void OTAUpdateTask(void *pvParameters) {
+  WiFiClientSecure client;
+  HTTPClient http;
+  
+  client.setInsecure();
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
   while(true) {
-    Serial.printf("[INFO]: Print from OTA Task - isFwOutdated: %s, isFwUrlReady: %s\n", isFwOutdated ? "true" : "false", isFwUrlReady ? "true" : "false");
-    Serial.printf("[INFO]: Print from OTA Task - Current firmware tag: %s, Current firmware version: %s\n", fwTag, fwVersion);
+    // Serial.printf("[INFO]: Print from OTA Task - isFwOutdated: %s, isFwUrlReady: %s\n", isFwOutdated ? "true" : "false", isFwUrlReady ? "true" : "false");
+    // Serial.printf("[INFO]: Print from OTA Task - Current firmware tag: %s, Current firmware version: %s\n", fwTag, fwVersion);
     if(isFwOutdated && isFwUrlReady) {
       Serial.println("[INFO]: New firmware version is ready");
-
-      HTTPClient http;
       Serial.println("[INFO]: Connecting to " + String(fwUrlProc));
     
-      http.begin(wifiClient, fwUrlProc);
+      http.begin(client, fwUrlProc);
       int httpCode = http.GET();
     
       if (httpCode != HTTP_CODE_OK) {
+        Serial.printf("[ERROR]: HTTP Response: %u\n", httpCode);
         Serial.printf("[ERROR]: HTTP GET firmware failed, error: %s\n", http.errorToString(httpCode).c_str());
         http.end();
         return;
@@ -361,6 +373,8 @@ void setup() {
   xTaskCreate(sendTelemetryTask, "sendTelemetryTask", 4096, NULL, 2, &pSendTelemetryTask);
   xTaskCreate(tbLoopTask, "tbLoopTask", 24576, NULL, 1, NULL);
   xTaskCreate(OTAUpdateTask, "OTAUpdateTask", 24576, NULL, 1, NULL);
+  xTaskCreate(VersionMonitorTask, "VersionMonitorTask", 4096, NULL, 1, NULL);
+  
 }
 
 void loop() {
